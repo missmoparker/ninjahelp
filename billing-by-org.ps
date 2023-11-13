@@ -1,0 +1,112 @@
+$body = @{
+grant_type = "client_credentials"
+client_id = "NINJA_CLIENT_APP_ID"
+client_secret = "NINJA_CLIENT_APP_SECRET"
+redirect_uri = "https://localhost"
+scope = "monitoring"
+}
+
+$API_AuthHeaders = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+$API_AuthHeaders.Add("accept", 'application/json')
+$API_AuthHeaders.Add("Content-Type", 'application/x-www-form-urlencoded')
+
+$auth_token = Invoke-RestMethod -Uri https://app.ninjarmm.com/oauth/token -Method POST -Headers $API_AuthHeaders -Body $body
+$access_token = $auth_token | Select-Object -ExpandProperty 'access_token' -EA 0
+
+$headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+$headers.Add("accept", 'application/json')
+$headers.Add("Authorization", "Bearer $access_token")
+
+# Get date of today
+
+$today = Get-Date -format "yyyyMMdd"
+
+# file paths
+
+$licenses_report = "c:\Users\All Users\Documents\NinjaOne Reports\" + $today + "_Ninja_Billing_Ticketing_Report.csv"
+#$organizations_report = $today + "_Ninja_Organizations_Report.csv"
+
+
+# define ninja urls
+$organizations_url = "https://app.ninjarmm.com/v2/organizations"
+$contacts_url = "https://app.ninjarmm.com/v2/ticketing/contact/contacts"
+
+# call ninja urls
+
+$contacts = Invoke-RestMethod -Uri $contacts_url -Method GET -Headers $headers
+$organizations = Invoke-RestMethod -Uri $organizations_url -Method GET -Headers $headers
+
+# add columns to organizations
+
+Foreach ($organization in $organizations) {
+ Add-Member `
+      -InputObject $organization `
+      -NotePropertyName "Active Contacts" `
+      -NotePropertyValue @()
+
+}
+
+Write-Host 'Looking for Contacts...'
+
+Foreach ($contact in $contacts) {
+  Foreach ($organization in $organizations) {
+    if ($device.organizationId -ne $organization.id) {
+      continue;
+    }
+    if ($device.nodeClass.EndsWith("_SERVER")) {
+      $organization.servers += $device.systemName
+    } elseif ($device.nodeClass.EndsWith("_WORKSTATION") -or $device.nodeClass -eq "MAC") {
+      $organization.workstations += $device.systemName
+    } elseif ($device.nodeClass.StartsWith("NMS")) {
+      $organization.networks += $device.id
+    }
+  }
+}
+
+Write-Host 'done ✅'
+
+
+Write-Host 'Looking for devices with Webroot ...'
+
+Foreach ($webroot in $webroots) {
+  Foreach ($device in $devices) {
+    Foreach ($organization in $organizations) {
+      if ($device.organizationId -ne $organization.id) {
+        continue;
+      }
+      if ($device.id -eq $webroot) {
+          $organization.webroots += $device.systemName
+      }
+    }
+  }
+}
+
+Write-Host 'done ✅'
+
+
+$organizations | Format-Table | Out-String
+
+Write-Host 'Creating the final report'
+
+$results = Foreach ($organization in $organizations) {
+    [PSCustomObject]@{
+        Name = $organization.Name
+        Workstations = $organization.workstations.length
+        Servers = $organization.servers.length
+        Total = ($organization.workstations.length + $organization.servers.length)
+        NMS = $organization.networks.length
+        "Remote devices" = $organization.remotes.length
+        "Bitdefender devices" = $organization.bitdefenders.length
+        "Webroot devices" = $organization.webroots.length
+    }
+  }
+
+$results | Format-Table | Out-String
+
+$results | Export-CSV -NoTypeInformation -Path $licenses_report
+#$organizations | Export-CSV -NoTypeInformation -Path $organizations_report
+
+
+Write-Host "csv files have been created with success!"
+Write-Host "Go to " $licenses_report " to find your Licenses Report"
+#Write-Host "Go to " $organizations_report " to double check the data"
